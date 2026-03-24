@@ -26,6 +26,91 @@ void addAuthHeaders(HTTPClient& http) {
 }
 
 bool isHttpsUrl(const std::string& url) { return url.rfind("https://", 0) == 0; }
+
+// Parse URL into host, port, and path components.
+// Preserves the hostname (not resolved to IP) so that HTTPClient sends the
+// correct Host header — required for reverse proxies like Traefik/nginx.
+bool parseUrl(const std::string& url, std::string& host, uint16_t& port, std::string& path) {
+  size_t start = url.find("://");
+  const bool https = (start != std::string::npos && url.compare(0, 5, "https") == 0);
+  start = (start != std::string::npos) ? start + 3 : 0;
+
+  size_t hostEnd = url.find_first_of(":/", start);
+  if (hostEnd == std::string::npos) hostEnd = url.size();
+  host = url.substr(start, hostEnd - start);
+  if (host.empty()) return false;
+
+  port = https ? 443 : 80;
+  if (hostEnd < url.size() && url[hostEnd] == ':') {
+    size_t portEnd = url.find('/', hostEnd);
+    if (portEnd == std::string::npos) portEnd = url.size();
+    port = static_cast<uint16_t>(atoi(url.c_str() + hostEnd + 1));
+    hostEnd = portEnd;
+  }
+
+  path = (hostEnd < url.size()) ? url.substr(hostEnd) : "/";
+  return true;
+}
+
+// Resolve hostname with retries. Returns true if resolved to a valid (non-zero) IP.
+bool resolveHost(const char* hostname, IPAddress& out, int maxRetries = 5) {
+  for (int i = 0; i < maxRetries; i++) {
+    if (WiFi.hostByName(hostname, out) && out != IPAddress(0, 0, 0, 0)) {
+      return true;
+    }
+    delay(200);
+  }
+  return false;
+}
+
+// Begin an HTTP(S) connection.
+// Resolves the hostname ourselves and connects to the IP directly, while passing
+// the original hostname to HTTPClient so it sends the correct Host header.
+// This is required for reverse proxies (Traefik, nginx) that route based on Host,
+// and works around ESP32 DNS resolution quirks.
+// plainClient/secureClient must outlive the HTTP request.
+bool beginHttp(HTTPClient& http, const std::string& url, WiFiClient& plainClient,
+               std::unique_ptr<WiFiClientSecure>& secureClient) {
+  std::string host;
+  uint16_t port;
+  std::string path;
+  if (!parseUrl(url, host, port, path)) {
+    LOG_ERR("KOSync", "Failed to parse URL: %s", url.c_str());
+    return false;
+  }
+
+  // Resolve hostname to IP ourselves (with retries)
+  IPAddress serverIp;
+  if (!resolveHost(host.c_str(), serverIp)) {
+    LOG_ERR("KOSync", "DNS resolution failed for: %s", host.c_str());
+    return false;
+  }
+  LOG_DBG("KOSync", "Resolved %s -> %s", host.c_str(), serverIp.toString().c_str());
+
+  http.setReuse(false);
+
+  if (isHttpsUrl(url)) {
+    secureClient = std::make_unique<WiFiClientSecure>();
+    secureClient->setInsecure();
+    // Pre-connect to the resolved IP
+    if (!secureClient->connect(serverIp, port)) {
+      LOG_ERR("KOSync", "TLS connect failed to %s:%d", serverIp.toString().c_str(), port);
+      return false;
+    }
+    // Pass the connected client with the original hostname (sets Host header correctly)
+    http.begin(*secureClient, host.c_str(), port, path.c_str(), true);
+  } else {
+    // Pre-connect to the resolved IP
+    if (!plainClient.connect(serverIp, port)) {
+      LOG_ERR("KOSync", "TCP connect failed to %s:%d", serverIp.toString().c_str(), port);
+      return false;
+    }
+    // Pass the connected client with the original hostname (sets Host header correctly)
+    http.begin(plainClient, host.c_str(), port, path.c_str());
+  }
+
+  return true;
+}
 }  // namespace
 
 KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
@@ -38,22 +123,15 @@ KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
   LOG_DBG("KOSync", "Authenticating: %s", url.c_str());
 
   HTTPClient http;
-  std::unique_ptr<WiFiClientSecure> secureClient;
   WiFiClient plainClient;
-
-  if (isHttpsUrl(url)) {
-    secureClient.reset(new WiFiClientSecure);
-    secureClient->setInsecure();
-    http.begin(*secureClient, url.c_str());
-  } else {
-    http.begin(plainClient, url.c_str());
-  }
+  std::unique_ptr<WiFiClientSecure> secureClient;
+  if (!beginHttp(http, url, plainClient, secureClient)) return NETWORK_ERROR;
   addAuthHeaders(http);
 
+  http.setTimeout(5000);
   const int httpCode = http.GET();
+  LOG_DBG("KOSync", "Auth response: %d (%s)", httpCode, http.errorToString(httpCode).c_str());
   http.end();
-
-  LOG_DBG("KOSync", "Auth response: %d", httpCode);
 
   if (httpCode == 200) {
     return OK;
@@ -76,16 +154,9 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
   LOG_DBG("KOSync", "Getting progress: %s", url.c_str());
 
   HTTPClient http;
-  std::unique_ptr<WiFiClientSecure> secureClient;
   WiFiClient plainClient;
-
-  if (isHttpsUrl(url)) {
-    secureClient.reset(new WiFiClientSecure);
-    secureClient->setInsecure();
-    http.begin(*secureClient, url.c_str());
-  } else {
-    http.begin(plainClient, url.c_str());
-  }
+  std::unique_ptr<WiFiClientSecure> secureClient;
+  if (!beginHttp(http, url, plainClient, secureClient)) return NETWORK_ERROR;
   addAuthHeaders(http);
 
   const int httpCode = http.GET();
@@ -138,16 +209,9 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
   LOG_DBG("KOSync", "Updating progress: %s", url.c_str());
 
   HTTPClient http;
-  std::unique_ptr<WiFiClientSecure> secureClient;
   WiFiClient plainClient;
-
-  if (isHttpsUrl(url)) {
-    secureClient.reset(new WiFiClientSecure);
-    secureClient->setInsecure();
-    http.begin(*secureClient, url.c_str());
-  } else {
-    http.begin(plainClient, url.c_str());
-  }
+  std::unique_ptr<WiFiClientSecure> secureClient;
+  if (!beginHttp(http, url, plainClient, secureClient)) return NETWORK_ERROR;
   addAuthHeaders(http);
   http.addHeader("Content-Type", "application/json");
 
