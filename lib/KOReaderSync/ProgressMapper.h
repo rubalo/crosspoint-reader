@@ -59,8 +59,15 @@ class ProgressMapper {
 
  private:
   /**
+   * Parse DocFragment index from KOReader XPath.
+   * KOReader format: /body/DocFragment[N]/... where N is 1-based.
+   * Returns 0-based spine index, or -1 if parsing fails.
+   */
+  static int parseDocFragmentIndex(const std::string& xpath);
+
+  /**
    * Generate XPath for KOReader compatibility.
-   * Format: /body/DocFragment[spineIndex+1]/body
+   * Format: /body/DocFragment[spineIndex+1]/body (1-based for KOReader)
    * Since CrossPoint doesn't preserve HTML structure, we rely on percentage for positioning.
    */
   static std::string generateXPath(int spineIndex, int pageNumber, int totalPages);

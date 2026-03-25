@@ -8,9 +8,10 @@
  * The algorithm reads 1024 bytes at specific offsets and computes the MD5 hash
  * of the concatenated data.
  *
- * Offsets are calculated as: 1024 << (2*i) for i = -1 to 10
- * Producing: 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304,
+ * Offsets are calculated as: lshift(1024, 2*i) for i = -1 to 10
+ * Producing: 0, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304,
  *            16777216, 67108864, 268435456, 1073741824 bytes
+ * Note: i=-1 yields offset 0 (LuaJIT lshift overflow to 0)
  *
  * If an offset is beyond the file size, it is skipped.
  */

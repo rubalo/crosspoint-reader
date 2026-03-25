@@ -32,9 +32,10 @@ std::string KOReaderDocumentId::calculateFromFilename(const std::string& filePat
 }
 
 size_t KOReaderDocumentId::getOffset(int i) {
-  // Offset = 1024 << (2*i)
-  // For i = -1: KOReader uses a value of 0
-  // For i >= 0: 1024 << (2*i)
+  // Offset = lshift(1024, 2*i)
+  // KOReader uses LuaJIT bit.lshift(1024, 2*i). For i=-1, that's
+  // lshift(1024, -2) which in LuaJIT masks to shift 30, overflowing
+  // 32-bit to 0. So i=-1 reads from offset 0 (start of file).
   if (i < 0) {
     return 0;
   }
