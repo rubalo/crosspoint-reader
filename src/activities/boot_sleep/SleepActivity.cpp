@@ -333,16 +333,16 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
       textBlockHeight += lineHeight10;
     }
 
-    const bool textBlack = (overlayMode != 2);
+    const bool textBlack = (overlayMode != 3);
     const int topPadding = lineHeight12 / 3;
     const int bottomPadding = lineHeight10 * 2 / 3;
     const int overlayHeight = textBlockHeight + topPadding + bottomPadding;
     const int overlayY = pageHeight - overlayHeight;
 
-    if (overlayMode == 1) {
+    if (overlayMode == 2) {
       renderer.fillRectDither(0, overlayY, pageWidth, overlayHeight, Color::LightGray);
     } else {
-      renderer.fillRect(0, overlayY, pageWidth, overlayHeight, overlayMode == 2);
+      renderer.fillRect(0, overlayY, pageWidth, overlayHeight, overlayMode == 3);
     }
 
     int currentY = overlayY + topPadding;
@@ -477,7 +477,7 @@ void SleepActivity::renderCoverSleepScreen() const {
       LOG_DBG("SLP", "Rendering sleep cover: %s", coverBmpPath.c_str());
       const uint8_t overlayMode = SETTINGS.sleepCoverOverlay;
       const BookOverlayInfo coverOverlayInfo =
-          overlayMode < 3 ? getBookOverlayInfo(APP_STATE.openEpubPath) : BookOverlayInfo{};
+          overlayMode != 0 ? getBookOverlayInfo(APP_STATE.openEpubPath) : BookOverlayInfo{};
       renderBitmapSleepScreen(bitmap, coverOverlayInfo);
       file.close();
       return;
