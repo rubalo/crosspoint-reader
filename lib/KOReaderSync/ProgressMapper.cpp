@@ -20,8 +20,8 @@ KOReaderPosition ProgressMapper::toKOReader(const std::shared_ptr<Epub>& epub, c
   // Calculate overall book progress (0.0-1.0)
   result.percentage = epub->calculateProgress(pos.spineIndex, intraSpineProgress);
 
-  // Generate XPath with estimated paragraph position based on page
-  result.xpath = generateXPath(pos.spineIndex, pos.pageNumber, pos.totalPages);
+  // Generate XPath with paragraph-level precision when element map is available
+  result.xpath = generateXPath(epub, pos.spineIndex, pos.pageNumber, pos.totalPages);
 
   // Get chapter info for logging
   const int tocIndex = epub->getTocIndexForSpineIndex(pos.spineIndex);
@@ -302,7 +302,64 @@ std::optional<uint16_t> ProgressMapper::lookupElementPage(const std::string& sec
   return std::nullopt;
 }
 
-std::string ProgressMapper::generateXPath(int spineIndex, int pageNumber, int totalPages) {
+int ProgressMapper::lookupPageFirstParagraph(const std::string& sectionFilePath, int pageNumber) {
+  if (pageNumber < 0) {
+    return -1;
+  }
+
+  FsFile f;
+  if (!Storage.openFileForRead("PM", sectionFilePath, f)) {
+    return -1;
+  }
+
+  uint8_t version;
+  serialization::readPod(f, version);
+  if (version < 19) {
+    f.close();
+    return -1;
+  }
+
+  constexpr uint32_t ELEMENT_MAP_OFFSET_POS = 28;
+  f.seek(ELEMENT_MAP_OFFSET_POS);
+  uint32_t elementMapOffset;
+  serialization::readPod(f, elementMapOffset);
+  if (elementMapOffset == 0 || elementMapOffset >= f.size()) {
+    f.close();
+    return -1;
+  }
+
+  f.seek(elementMapOffset);
+  uint16_t paragraphCount;
+  serialization::readPod(f, paragraphCount);
+
+  // Scan paragraphs to find the first one on the target page
+  for (int i = 0; i < paragraphCount; i++) {
+    uint16_t page;
+    serialization::readPod(f, page);
+    if (page == static_cast<uint16_t>(pageNumber)) {
+      f.close();
+      return i;
+    }
+  }
+
+  f.close();
+  return -1;
+}
+
+std::string ProgressMapper::generateXPath(const std::shared_ptr<Epub>& epub, int spineIndex, int pageNumber,
+                                           int totalPages) {
   // KOReader uses 1-based DocFragment indices (XPath standard)
-  return "/body/DocFragment[" + std::to_string(spineIndex + 1) + "]/body";
+  const std::string base = "/body/DocFragment[" + std::to_string(spineIndex + 1) + "]/body";
+
+  // Try to find the first paragraph on this page for a precise XPath
+  if (epub && pageNumber > 0) {
+    const std::string sectionPath = epub->getCachePath() + "/sections/" + std::to_string(spineIndex) + ".bin";
+    int paragraphIndex = lookupPageFirstParagraph(sectionPath, pageNumber);
+    if (paragraphIndex >= 0) {
+      // KOReader XPath uses 1-based paragraph indices
+      return base + "/p[" + std::to_string(paragraphIndex + 1) + "]";
+    }
+  }
+
+  return base;
 }

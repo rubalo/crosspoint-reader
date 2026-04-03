@@ -82,9 +82,15 @@ class ProgressMapper {
   static std::optional<uint16_t> lookupElementPage(const std::string& sectionFilePath, ElementType type, int index);
 
   /**
-   * Generate XPath for KOReader compatibility.
-   * Format: /body/DocFragment[spineIndex+1]/body (1-based for KOReader)
-   * Since CrossPoint doesn't preserve HTML structure, we rely on percentage for positioning.
+   * Reverse lookup: given a page number, find the first paragraph index on that page.
+   * Returns the 0-based paragraph index, or -1 if not found.
    */
-  static std::string generateXPath(int spineIndex, int pageNumber, int totalPages);
+  static int lookupPageFirstParagraph(const std::string& sectionFilePath, int pageNumber);
+
+  /**
+   * Generate XPath for KOReader compatibility.
+   * Produces /body/DocFragment[N]/body/p[X] when element map is available,
+   * falls back to /body/DocFragment[N]/body otherwise.
+   */
+  static std::string generateXPath(const std::shared_ptr<Epub>& epub, int spineIndex, int pageNumber, int totalPages);
 };
